@@ -1,0 +1,19 @@
+{
+  "name": "xrmtoolbox-testing",
+  "version": "1.0.0",
+  "description": "Claude Code skill for testing XrmToolBox plugins. Provides test project scaffolding, mock patterns for IOrganizationService, smoke test templates, and integration testing guidance.",
+  "author": {
+    "name": "Samuel Hurley",
+    "url": "https://github.com/HurleySk"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/HurleySk/claude-xrmtoolbox-testing-skill",
+  "repository": "https://github.com/HurleySk/claude-xrmtoolbox-testing-skill",
+  "keywords": [
+    "xrmtoolbox",
+    "dynamics365",
+    "dataverse",
+    "testing",
+    "plugin"
+  ]
+}
