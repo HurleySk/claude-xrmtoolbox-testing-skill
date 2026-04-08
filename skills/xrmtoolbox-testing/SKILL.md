@@ -357,75 +357,159 @@ static void TestSqliteResumeTracker()
 
 ### `ui-test`
 
-Run automated UI tests against a plugin using the **XrmToolBox Test Harness** and **FlaUI-MCP**.
+Run automated UI tests against a plugin using the **XrmToolBox Test Harness** and **FlaUI-MCP**. This is a multi-step agent workflow — execute each step in order, checking the result before proceeding.
 
-The test harness ([xrmtoolbox-testing-toolkit](https://github.com/HurleySk/xrmtoolbox-testing-toolkit)) is a standalone WinForms app that hosts any XrmToolBox plugin DLL outside of XrmToolBox, injecting a configurable mock `IOrganizationService`.
+The test harness ([xrmtoolbox-testing-toolkit](https://github.com/HurleySk/xrmtoolbox-testing-toolkit)) is a standalone WinForms app that hosts any XrmToolBox plugin DLL outside of XrmToolBox, injecting a configurable mock `IOrganizationService`. The harness repo also includes `generate-mockdata.ps1` which auto-analyzes plugin source code and generates starter mock data + a control inventory.
 
-#### Prerequisites
+#### Step 1: Verify Prerequisites
 
-1. **Build the test harness** (clone if needed):
+Execute these checks in order. Fix any that fail before proceeding.
+
+**1a. Locate the test harness repo and exe.**
+
+Glob for `XrmToolBox.TestHarness.exe` on disk:
 ```bash
-git clone https://github.com/HurleySk/xrmtoolbox-testing-toolkit.git
-cd xrmtoolbox-testing-toolkit
-dotnet build --configuration Release
+find "$HOME/source/repos" -path "*/xrmtoolbox-testing-toolkit/*/bin/Release/*/XrmToolBox.TestHarness.exe" 2>/dev/null | head -1
 ```
 
-2. **Set up FlaUI-MCP** for AI-agent-driven UI testing. The test harness repo includes a setup script:
+- **Check**: The find returns a path. Store it as `$HARNESS_EXE`. Derive `$HARNESS_REPO` as the repo root (ancestor containing `XrmToolBox.TestHarness.slnx`).
+- **Fix if not found**: Clone and build:
+```bash
+git clone https://github.com/HurleySk/xrmtoolbox-testing-toolkit.git "$HOME/source/repos/xrmtoolbox-testing-toolkit"
+cd "$HOME/source/repos/xrmtoolbox-testing-toolkit"
+dotnet build --configuration Release
+```
+Then re-run the find to get `$HARNESS_EXE` and `$HARNESS_REPO`.
+
+**1b. Check that FlaUI-MCP is installed and registered.**
+
+```bash
+test -f "C:/tools/FlaUI-MCP/FlaUI.Mcp.exe" && echo "INSTALLED" || echo "NOT INSTALLED"
+```
+
+- **Check**: Output says `INSTALLED`.
+- **Fix if NOT INSTALLED**: Run the setup script from the harness repo:
 ```powershell
-.\setup-flaui-mcp.ps1
+powershell -ExecutionPolicy Bypass -File "$HARNESS_REPO\setup-flaui-mcp.ps1"
 ```
 This clones FlaUI-MCP, builds it, publishes to `C:\tools\FlaUI-MCP`, and registers it as the `flaui-mcp` MCP server in Claude Code. Requires .NET 8+ SDK.
 
-**IMPORTANT for Claude Code**: Before starting a UI test workflow, check if FlaUI-MCP is available by looking for the `flaui-mcp` MCP server. If it is not registered, check if `C:\tools\FlaUI-MCP\FlaUI.Mcp.exe` exists. If neither is true, look for `setup-flaui-mcp.ps1` in the test harness repo directory and run it:
-```powershell
-powershell -ExecutionPolicy Bypass -File "path\to\xrmtoolbox-testing-toolkit\setup-flaui-mcp.ps1"
-```
-If the test harness repo is not cloned locally, clone it first, then run the script.
+**1c. Locate the plugin DLL.**
 
-#### Workflow
-
-1. **Create mock data** for your plugin. Start from `samples/basic-mockdata.json` and add responses your plugin needs:
-
-```json
-{
-  "settings": { "throwIfUnmatched": false },
-  "responses": [
-    {
-      "operation": "RetrieveMultiple",
-      "description": "Return test entities",
-      "match": { "entityName": "account" },
-      "response": {
-        "entities": [
-          {
-            "logicalName": "account",
-            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "attributes": { "name": "Test Account" }
-          }
-        ],
-        "moreRecords": false
-      }
-    }
-  ]
-}
-```
-
-2. **Launch the harness** with your plugin:
+Glob for the plugin DLL in `bin/Release`:
 ```bash
-XrmToolBox.TestHarness.exe --plugin "path\to\YourPlugin.dll" --mockdata "mockdata.json" --screenshots "./screenshots" --record "calls.json"
+find "<PLUGIN_PROJECT_DIR>" -path "*/bin/Release/*" -name "*.dll" | grep -v "Microsoft\." | grep -v "System\." | grep -v "Newtonsoft" | grep -v "McTools" | grep -v "XrmToolBox\." | head -5
 ```
 
-3. **Drive the UI via FlaUI-MCP** (Claude Code can do this automatically):
-   - Find the harness window by title: `"Test Harness - {PluginName}"`
-   - Controls are discoverable by `AutomationId` (the WinForms control `Name`)
-   - Standard XrmToolBox Hungarian naming works: `btnLoad`, `dgvAttributes`, `cboSolutions`, `txtFilter`, etc.
-   - Click buttons, fill text fields, read grid data, take screenshots
+- **Check**: Identify the plugin DLL (matches the project/assembly name).
+- **Fix if not found**: `dotnet build <PLUGIN_PROJECT_DIR>/<PluginName>.csproj --configuration Release`
+- Store the full path as `$PLUGIN_DLL`.
 
-4. **Verify results**:
-   - Check screenshots for visual correctness
-   - Read `calls.json` to verify the plugin made expected SDK calls
-   - Inspect control properties (enabled/disabled, text, row count)
+#### Step 2: Analyze the Plugin
 
-#### Mock Data Match Criteria
+Use the `generate-mockdata.ps1` script to automatically discover controls, SDK patterns, and entity names.
+
+**2a. Run the generator script.**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HARNESS_REPO\generate-mockdata.ps1" -PluginSourceDir "<PLUGIN_PROJECT_DIR>"
+```
+
+This produces two files in the plugin directory:
+- `test-mockdata.json` — starter mock data with responses for all discovered SDK patterns
+- `test-control-inventory.json` — all UI controls with names, types, and interaction categories
+
+**2b. Read the generated files.**
+
+Read `test-control-inventory.json`. Key fields:
+- `controls[]` — array of `{name, type, category, prefix}` for every UI control
+- `summary` — counts by category (buttons, grids, dropdowns, textBoxes, etc.)
+- `actionButtons[]` — list of all button names
+- `primaryAction` — the recommended first button to click (heuristic: first btn* that isn't stop/cancel/close/browse)
+
+Read `test-mockdata.json`. It contains:
+- WhoAmI response (always present)
+- Execute responses for each discovered SDK request type
+- RetrieveMultiple responses for each discovered entity name
+- Wildcard fallbacks for all operations
+
+**2c. Review and augment if needed.**
+
+The generated mock data covers discovered patterns. You may need to add entries if:
+- The plugin needs specific attribute values (e.g., a grid expects `friendlyname` on solutions)
+- The plugin uses metadata requests that need non-empty results
+- The plugin uses FetchXML with specific expected columns
+- Error appears when running: check `calls.json` for unmatched calls and add matching responses
+
+#### Step 3: Launch the Test Harness
+
+Run the harness in the background:
+```bash
+"$HARNESS_EXE" --plugin "$PLUGIN_DLL" --mockdata "<PLUGIN_DIR>/test-mockdata.json" --screenshots "./screenshots" --record "calls.json" &
+```
+
+Wait 3-5 seconds for initialization, then verify via FlaUI-MCP:
+- Use FlaUI-MCP to find a window with name containing `"Test Harness"`
+- If found, the plugin loaded successfully
+
+**Common failures:**
+- **Plugin DLL dependencies missing**: Copy dependency DLLs from harness output dir alongside plugin DLL, or vice versa
+- **JSON syntax error**: Validate `test-mockdata.json` is valid JSON
+- **Plugin throws on load**: Check console output; the plugin may require specific mock data to be present during initialization (e.g., WhoAmI)
+
+#### Step 4: Drive the UI via FlaUI-MCP
+
+Use the control inventory from Step 2b to interact with the plugin. Follow this sequence:
+
+**4a. Take initial screenshot.** Verify the plugin rendered correctly (controls visible, no error state).
+
+**4b. Set up input controls** (from the inventory, category = input-*):
+- **Dropdowns (cbo/cmb)**: Use FlaUI-MCP to expand and select the first available item
+- **TextBoxes (txt)**: Enter a test value appropriate to the control name (e.g., `txtFilter` → `"test"`, `txtCsvPath` → a sample file path)
+- **CheckBoxes (chk)**: Leave at defaults unless testing a specific toggle
+- **Numerics (nud)**: Leave at defaults
+
+**4c. Click the primary action button.** Use the `primaryAction` field from the control inventory. Common names: `btnLoad`, `btnLoadEntities`, `btnStart`, `btnExport`, `btnExecute`, `btnRetrieve`.
+
+**4d. Wait for completion.** After clicking, wait 2-3 seconds then check:
+- Is a progress bar visible and at 100%?
+- Has a DataGridView been populated (row count > 0)?
+- Has a status label text changed from its initial value?
+- Is the action button re-enabled (it may disable during work)?
+
+**4e. Take post-action screenshot.** Capture the state after the action completes.
+
+#### Step 5: Verify Results
+
+**5a. Check UI state via FlaUI-MCP:**
+- Read DataGridView row count and cell values from any `dgv*` control
+- Read text from `lbl*` controls for status messages
+- Check for modal error dialog windows (title containing "Error")
+
+**5b. Check SDK call recording:**
+
+Read `calls.json` (written by the harness on exit, or use `--record` path). Each entry has:
+- `Operation` — the SDK method called (Create, Retrieve, RetrieveMultiple, Update, Delete, Execute, Associate, Disassociate)
+- `EntityName` — the entity targeted (if applicable)
+- `RequestTypeName` — the full type name for Execute calls
+- `WasMatched` — whether a mock response was found
+- `MatchedDescription` — which mock entry matched
+
+Verify:
+- Expected operations were called (e.g., plugin that loads entities should have RetrieveMultiple or RetrieveAllEntitiesRequest)
+- No unexpected unmatched calls (check `WasMatched: false` entries)
+
+#### Step 6: Report
+
+Summarize the test run:
+- **Plugin loaded**: yes/no
+- **Primary action completed**: yes/no (based on UI state changes)
+- **SDK calls**: total count, breakdown by operation, any unmatched
+- **Errors**: any error dialogs or exceptions
+- **Screenshots**: paths to initial and post-action screenshots
+- **Assessment**: pass (plugin loaded, action completed, no errors) or fail (with reason)
+
+#### Appendix: Mock Data Match Criteria
 
 | Key | Description |
 |-----|-------------|
@@ -433,11 +517,11 @@ XrmToolBox.TestHarness.exe --plugin "path\to\YourPlugin.dll" --mockdata "mockdat
 | `requestType` | Match Execute requests by full type name (e.g., `Microsoft.Crm.Sdk.Messages.WhoAmIRequest`) |
 | `queryExpressionEntity` | Match QueryExpression by entity name |
 | `fetchXmlContains` | Match FetchExpression containing a substring |
-| `*` | Wildcard -- matches anything |
+| `*` | Wildcard — matches anything |
 
 Responses are matched in order; first match wins. Use `resultsFile` for large payloads (metadata responses) in separate JSON files.
 
-#### CLI Options
+#### Appendix: CLI Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -450,10 +534,39 @@ Responses are matched in order; first match wins. Use `resultsFile` for large pa
 | `--record, -r <path>` | Record SDK calls to JSON on exit | |
 | `--no-autoconnect` | Don't inject mock service on load | |
 
-#### Tips
+#### Appendix: Common Request Type Full Names
+
+| Short Name | Full Type Name |
+|------------|---------------|
+| WhoAmIRequest | Microsoft.Crm.Sdk.Messages.WhoAmIRequest |
+| RetrieveAllEntitiesRequest | Microsoft.Xrm.Sdk.Messages.RetrieveAllEntitiesRequest |
+| RetrieveEntityRequest | Microsoft.Xrm.Sdk.Messages.RetrieveEntityRequest |
+| RetrieveAttributeRequest | Microsoft.Xrm.Sdk.Messages.RetrieveAttributeRequest |
+| ExecuteMultipleRequest | Microsoft.Xrm.Sdk.Messages.ExecuteMultipleRequest |
+| AssociateRequest | Microsoft.Xrm.Sdk.Messages.AssociateRequest |
+| RetrieveRelationshipRequest | Microsoft.Xrm.Sdk.Messages.RetrieveRelationshipRequest |
+
+#### Appendix: Control Name Prefixes (Hungarian Notation)
+
+| Prefix | Control Type | FlaUI Interaction |
+|--------|-------------|------------------|
+| btn | Button | Click via Invoke pattern |
+| dgv | DataGridView | Read via Grid/Table pattern |
+| cbo, cmb | ComboBox | Expand + SelectItem via Selection pattern |
+| txt | TextBox | SetValue via Value pattern |
+| chk | CheckBox | Toggle via Toggle pattern |
+| nud | NumericUpDown | SetValue via Value pattern |
+| rtb | RichTextBox | SetValue via Value pattern |
+| lbl | Label | Read via Name/Value |
+| tab | TabControl/TabPage | SelectItem via Selection pattern |
+| grp | GroupBox | Container (no interaction) |
+| split | SplitContainer | Container (no interaction) |
+| progress | ProgressBar | Read via RangeValue pattern |
+
+#### Appendix: Tips
 
 - Press **F12** in the harness window to take a manual screenshot
-- The mock service records every SDK call -- check `calls.json` after closing to verify plugin behavior
+- The mock service records every SDK call — check `calls.json` after closing to verify plugin behavior
 - Use `"fault"` entries in mock data to test error handling paths
 - Use `"delay"` to simulate slow responses and test loading indicators
 
