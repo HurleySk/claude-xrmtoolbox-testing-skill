@@ -370,9 +370,17 @@ cd xrmtoolbox-testing-toolkit
 dotnet build --configuration Release
 ```
 
-2. **Install FlaUI-MCP** for AI-agent-driven UI testing:
-   - Clone https://github.com/shanselman/FlaUI-MCP
-   - Build and add to Claude Code's MCP settings
+2. **Set up FlaUI-MCP** for AI-agent-driven UI testing. The test harness repo includes a setup script:
+```powershell
+.\setup-flaui-mcp.ps1
+```
+This clones FlaUI-MCP, builds it, publishes to `C:\tools\FlaUI-MCP`, and registers it as the `flaui-mcp` MCP server in Claude Code. Requires .NET 8+ SDK.
+
+**IMPORTANT for Claude Code**: Before starting a UI test workflow, check if FlaUI-MCP is available by looking for the `flaui-mcp` MCP server. If it is not registered, check if `C:\tools\FlaUI-MCP\FlaUI.Mcp.exe` exists. If neither is true, look for `setup-flaui-mcp.ps1` in the test harness repo directory and run it:
+```powershell
+powershell -ExecutionPolicy Bypass -File "path\to\xrmtoolbox-testing-toolkit\setup-flaui-mcp.ps1"
+```
+If the test harness repo is not cloned locally, clone it first, then run the script.
 
 #### Workflow
 
