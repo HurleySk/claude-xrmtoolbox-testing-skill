@@ -361,6 +361,8 @@ Run automated UI tests against a plugin using the **XrmToolBox Test Harness** an
 
 The test harness ([xrmtoolbox-testing-toolkit](https://github.com/HurleySk/xrmtoolbox-testing-toolkit)) is a standalone WinForms app that hosts any XrmToolBox plugin DLL outside of XrmToolBox, injecting a configurable mock `IOrganizationService`. The harness repo also includes `generate-mockdata.ps1` which auto-analyzes plugin source code and generates starter mock data + a control inventory.
 
+**Terminology**: Throughout this workflow, `$HARNESS_EXE`, `$HARNESS_REPO`, `$PLUGIN_DIR`, and `$PLUGIN_DLL` are conceptual variables — remember these paths as you discover them in Step 1.
+
 #### Step 1: Verify Prerequisites
 
 Execute these checks in order. Fix any that fail before proceeding.
@@ -372,7 +374,7 @@ Glob for `XrmToolBox.TestHarness.exe` on disk:
 find "$HOME/source/repos" -path "*/xrmtoolbox-testing-toolkit/*/bin/Release/*/XrmToolBox.TestHarness.exe" 2>/dev/null | head -1
 ```
 
-- **Check**: The find returns a path. Store it as `$HARNESS_EXE`. Derive `$HARNESS_REPO` as the repo root (ancestor containing `XrmToolBox.TestHarness.slnx`).
+- **Check**: The find returns a path. Remember it as `$HARNESS_EXE`. Derive `$HARNESS_REPO` as the repo root (ancestor containing `XrmToolBox.TestHarness.slnx`).
 - **Fix if not found**: Clone and build:
 ```bash
 git clone https://github.com/HurleySk/xrmtoolbox-testing-toolkit.git "$HOME/source/repos/xrmtoolbox-testing-toolkit"
@@ -392,18 +394,26 @@ test -f "C:/tools/FlaUI-MCP/FlaUI.Mcp.exe" && echo "INSTALLED" || echo "NOT INST
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$HARNESS_REPO\setup-flaui-mcp.ps1"
 ```
-This clones FlaUI-MCP, builds it, publishes to `C:\tools\FlaUI-MCP`, and registers it as the `flaui-mcp` MCP server in Claude Code. Requires .NET 8+ SDK.
+This clones FlaUI-MCP, builds it, publishes to `C:\tools\FlaUI-MCP`, and registers it as the `flaui-mcp` MCP server in Claude Code. Requires .NET 8+ SDK. **Note**: If this is the first time setting up FlaUI-MCP, you may need to restart Claude Code for the MCP server to become available.
 
 **1c. Locate the plugin DLL.**
 
-Glob for the plugin DLL in `bin/Release`:
+First, find the `.csproj` file name to know the DLL name:
 ```bash
-find "<PLUGIN_PROJECT_DIR>" -path "*/bin/Release/*" -name "*.dll" | grep -v "Microsoft\." | grep -v "System\." | grep -v "Newtonsoft" | grep -v "McTools" | grep -v "XrmToolBox\." | head -5
+ls "$PLUGIN_DIR"/*.csproj
 ```
 
-- **Check**: Identify the plugin DLL (matches the project/assembly name).
-- **Fix if not found**: `dotnet build <PLUGIN_PROJECT_DIR>/<PluginName>.csproj --configuration Release`
-- Store the full path as `$PLUGIN_DLL`.
+The plugin DLL will match the `.csproj` stem. Look for it in `bin/Release`:
+```bash
+find "$PLUGIN_DIR" -path "*/bin/Release/*" -name "*.dll" | grep -v "Microsoft\." | grep -v "System\." | grep -v "Newtonsoft" | grep -v "McTools" | grep -v "XrmToolBox\." | head -5
+```
+
+- **Check**: Identify the plugin DLL (matches the `.csproj` file name, e.g., `MyPlugin.csproj` → `MyPlugin.dll`).
+- **Fix if not found**: Build the plugin:
+```bash
+dotnet build "$PLUGIN_DIR"/*.csproj --configuration Release
+```
+- Remember the full path as `$PLUGIN_DLL`.
 
 #### Step 2: Analyze the Plugin
 
@@ -412,7 +422,7 @@ Use the `generate-mockdata.ps1` script to automatically discover controls, SDK p
 **2a. Run the generator script.**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HARNESS_REPO\generate-mockdata.ps1" -PluginSourceDir "<PLUGIN_PROJECT_DIR>"
+powershell -ExecutionPolicy Bypass -File "$HARNESS_REPO\generate-mockdata.ps1" -PluginSourceDir "$PLUGIN_DIR"
 ```
 
 This produces two files in the plugin directory:
@@ -421,13 +431,13 @@ This produces two files in the plugin directory:
 
 **2b. Read the generated files.**
 
-Read `test-control-inventory.json`. Key fields:
+Read `$PLUGIN_DIR/test-control-inventory.json`. Key fields:
 - `controls[]` — array of `{name, type, category, prefix}` for every UI control
 - `summary` — counts by category (buttons, grids, dropdowns, textBoxes, etc.)
 - `actionButtons[]` — list of all button names
 - `primaryAction` — the recommended first button to click (heuristic: first btn* that isn't stop/cancel/close/browse)
 
-Read `test-mockdata.json`. It contains:
+Read `$PLUGIN_DIR/test-mockdata.json`. It contains:
 - WhoAmI response (always present)
 - Execute responses for each discovered SDK request type
 - RetrieveMultiple responses for each discovered entity name
@@ -443,14 +453,14 @@ The generated mock data covers discovered patterns. You may need to add entries 
 
 #### Step 3: Launch the Test Harness
 
-Run the harness in the background:
+Run the harness in the background. The `--record` path is relative to where you launch the command:
 ```bash
-"$HARNESS_EXE" --plugin "$PLUGIN_DLL" --mockdata "<PLUGIN_DIR>/test-mockdata.json" --screenshots "./screenshots" --record "calls.json" &
+"$HARNESS_EXE" --plugin "$PLUGIN_DLL" --mockdata "$PLUGIN_DIR/test-mockdata.json" --screenshots "$PLUGIN_DIR/screenshots" --record "$PLUGIN_DIR/calls.json" &
 ```
 
-Wait 3-5 seconds for initialization, then verify via FlaUI-MCP:
-- Use FlaUI-MCP to find a window with name containing `"Test Harness"`
-- If found, the plugin loaded successfully
+Wait 3-5 seconds for initialization, then verify via FlaUI-MCP: call `windows_list_windows` and look for a window with title containing `"Test Harness"`. Remember its handle (e.g., `w1`).
+
+If found, the plugin loaded successfully.
 
 **Common failures:**
 - **Plugin DLL dependencies missing**: Copy dependency DLLs from harness output dir alongside plugin DLL, or vice versa
@@ -459,36 +469,37 @@ Wait 3-5 seconds for initialization, then verify via FlaUI-MCP:
 
 #### Step 4: Drive the UI via FlaUI-MCP
 
-Use the control inventory from Step 2b to interact with the plugin. Follow this sequence:
+FlaUI-MCP uses a snapshot-and-ref model: call `windows_snapshot` to get the accessibility tree with element refs (e.g., `w1e5`), then use those refs with `windows_click`, `windows_fill`, `windows_get_text`, etc. **Element refs change after each snapshot**, so always re-snapshot after UI changes.
 
-**4a. Take initial screenshot.** Verify the plugin rendered correctly (controls visible, no error state).
+**4a. Take initial screenshot and snapshot.** Use `windows_screenshot` then `windows_snapshot` on the harness window handle. The snapshot returns a text tree of all controls with their names and refs. Cross-reference against your control inventory from Step 2b — verify key controls are present.
 
 **4b. Set up input controls** (from the inventory, category = input-*):
-- **Dropdowns (cbo/cmb)**: Use FlaUI-MCP to expand and select the first available item
-- **TextBoxes (txt)**: Enter a test value appropriate to the control name (e.g., `txtFilter` → `"test"`, `txtCsvPath` → a sample file path)
-- **CheckBoxes (chk)**: Leave at defaults unless testing a specific toggle
-- **Numerics (nud)**: Leave at defaults
+- **Dropdowns (cbo/cmb)**: `windows_click` to expand, re-snapshot to see items, `windows_click` on first item
+- **TextBoxes (txt)**: `windows_fill` with a test value appropriate to the control name (e.g., `txtFilter` → `"test"`)
+- **CheckBoxes (chk)**: `windows_click` to toggle if needed
+- **Numerics (nud)**: Leave at defaults unless testing specific values
 
-**4c. Click the primary action button.** Use the `primaryAction` field from the control inventory. Common names: `btnLoad`, `btnLoadEntities`, `btnStart`, `btnExport`, `btnExecute`, `btnRetrieve`.
+**4c. Click the primary action button.** Use the `primaryAction` field from the control inventory. Find it in the snapshot and `windows_click` it. Common names: `btnLoad`, `btnLoadEntities`, `btnStart`, `btnExport`, `btnExecute`, `btnRetrieve`.
 
-**4d. Wait for completion.** After clicking, wait 2-3 seconds then check:
-- Is a progress bar visible and at 100%?
-- Has a DataGridView been populated (row count > 0)?
-- Has a status label text changed from its initial value?
-- Is the action button re-enabled (it may disable during work)?
+**4d. Wait for completion.** After clicking, wait 2-3 seconds then re-snapshot and check:
+- Has a DataGridView been populated? (Look for row elements under the datagrid in the snapshot)
+- Has a status label text changed? Use `windows_get_text` to read it
+- Is the action button still present and not marked `[disabled]` in the snapshot?
 
-**4e. Take post-action screenshot.** Capture the state after the action completes.
+**4e. Take post-action screenshot.** Use `windows_screenshot` on the harness window.
 
 #### Step 5: Verify Results
 
 **5a. Check UI state via FlaUI-MCP:**
-- Read DataGridView row count and cell values from any `dgv*` control
-- Read text from `lbl*` controls for status messages
-- Check for modal error dialog windows (title containing "Error")
+- Read text from status labels with `windows_get_text`
+- Check for modal error dialogs with `windows_list_windows` — look for new windows with "Error" in the title
+- Re-snapshot with `windows_snapshot` and look at the datagrid tree for row data
 
-**5b. Check SDK call recording:**
+**5b. Close the harness and check SDK call recording.**
 
-Read `calls.json` (written by the harness on exit, or use `--record` path). Each entry has:
+Close the harness with `windows_close` so it writes `calls.json`.
+
+Then read `$PLUGIN_DIR/calls.json`. Each entry has:
 - `Operation` — the SDK method called (Create, Retrieve, RetrieveMultiple, Update, Delete, Execute, Associate, Disassociate)
 - `EntityName` — the entity targeted (if applicable)
 - `RequestTypeName` — the full type name for Execute calls
@@ -498,6 +509,8 @@ Read `calls.json` (written by the harness on exit, or use `--record` path). Each
 Verify:
 - Expected operations were called (e.g., plugin that loads entities should have RetrieveMultiple or RetrieveAllEntitiesRequest)
 - No unexpected unmatched calls (check `WasMatched: false` entries)
+
+**Debugging loop**: If there are unmatched calls, add matching responses to `test-mockdata.json` and re-run from Step 3.
 
 #### Step 6: Report
 
@@ -548,25 +561,23 @@ Responses are matched in order; first match wins. Use `resultsFile` for large pa
 
 #### Appendix: Control Name Prefixes (Hungarian Notation)
 
-| Prefix | Control Type | FlaUI Interaction |
-|--------|-------------|------------------|
-| btn | Button | Click via Invoke pattern |
-| dgv | DataGridView | Read via Grid/Table pattern |
-| cbo, cmb | ComboBox | Expand + SelectItem via Selection pattern |
-| txt | TextBox | SetValue via Value pattern |
-| chk | CheckBox | Toggle via Toggle pattern |
-| nud | NumericUpDown | SetValue via Value pattern |
-| rtb | RichTextBox | SetValue via Value pattern |
-| lbl | Label | Read via Name/Value |
-| tab | TabControl/TabPage | SelectItem via Selection pattern |
-| grp | GroupBox | Container (no interaction) |
-| split | SplitContainer | Container (no interaction) |
-| progress | ProgressBar | Read via RangeValue pattern |
+| Prefix | Control Type | FlaUI-MCP Tool |
+|--------|-------------|---------------|
+| btn | Button | `windows_click` |
+| dgv | DataGridView | `windows_snapshot` (read tree), `windows_get_text` (cells) |
+| cbo, cmb | ComboBox | `windows_click` (expand + select item) |
+| txt | TextBox | `windows_fill` |
+| chk | CheckBox | `windows_click` (toggle) |
+| nud | NumericUpDown | `windows_fill` |
+| rtb | RichTextBox | `windows_fill` |
+| lbl | Label | `windows_get_text` |
+| tab | TabControl | `windows_click` (tab header) |
+| progress | ProgressBar | `windows_get_text` |
 
 #### Appendix: Tips
 
 - Press **F12** in the harness window to take a manual screenshot
-- The mock service records every SDK call — check `calls.json` after closing to verify plugin behavior
+- The mock service records every SDK call — `calls.json` is written when the harness window closes
 - Use `"fault"` entries in mock data to test error handling paths
 - Use `"delay"` to simulate slow responses and test loading indicators
 
