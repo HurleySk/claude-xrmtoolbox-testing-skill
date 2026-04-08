@@ -1,6 +1,6 @@
 {
   "name": "xrmtoolbox-testing",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Claude Code skill for testing XrmToolBox plugins. Provides test project scaffolding, mock patterns for IOrganizationService, smoke test templates, UI testing via Test Harness + FlaUI-MCP, and integration testing guidance.",
   "author": {
     "name": "Samuel Hurley",
