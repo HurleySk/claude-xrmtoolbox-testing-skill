@@ -1,7 +1,7 @@
 {
   "name": "xrmtoolbox-testing",
-  "version": "1.0.0",
-  "description": "Claude Code skill for testing XrmToolBox plugins. Provides test project scaffolding, mock patterns for IOrganizationService, smoke test templates, and integration testing guidance.",
+  "version": "1.1.0",
+  "description": "Claude Code skill for testing XrmToolBox plugins. Provides test project scaffolding, mock patterns for IOrganizationService, smoke test templates, UI testing via Test Harness + FlaUI-MCP, and integration testing guidance.",
   "author": {
     "name": "Samuel Hurley",
     "url": "https://github.com/HurleySk"

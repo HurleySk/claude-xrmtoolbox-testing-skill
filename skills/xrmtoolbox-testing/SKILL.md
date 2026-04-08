@@ -1,7 +1,7 @@
 ---
 name: xrmtoolbox-testing
-description: Test XrmToolBox plugins for Dynamics 365 / Dataverse. Use when the user wants to add tests, create mocks, write smoke tests, or validate plugin functionality without manual UI testing.
-argument-hint: "[scaffold|mock|smoke|help]"
+description: Test XrmToolBox plugins for Dynamics 365 / Dataverse. Use when the user wants to add tests, create mocks, write smoke tests, run UI tests, or validate plugin functionality.
+argument-hint: "[scaffold|mock|smoke|ui-test|help]"
 ---
 
 # XrmToolBox Plugin Testing
@@ -355,13 +355,106 @@ static void TestSqliteResumeTracker()
 }
 ```
 
+### `ui-test`
+
+Run automated UI tests against a plugin using the **XrmToolBox Test Harness** and **FlaUI-MCP**.
+
+The test harness ([xrmtoolbox-testing-toolkit](https://github.com/HurleySk/xrmtoolbox-testing-toolkit)) is a standalone WinForms app that hosts any XrmToolBox plugin DLL outside of XrmToolBox, injecting a configurable mock `IOrganizationService`.
+
+#### Prerequisites
+
+1. **Build the test harness** (clone if needed):
+```bash
+git clone https://github.com/HurleySk/xrmtoolbox-testing-toolkit.git
+cd xrmtoolbox-testing-toolkit
+dotnet build --configuration Release
+```
+
+2. **Install FlaUI-MCP** for AI-agent-driven UI testing:
+   - Clone https://github.com/shanselman/FlaUI-MCP
+   - Build and add to Claude Code's MCP settings
+
+#### Workflow
+
+1. **Create mock data** for your plugin. Start from `samples/basic-mockdata.json` and add responses your plugin needs:
+
+```json
+{
+  "settings": { "throwIfUnmatched": false },
+  "responses": [
+    {
+      "operation": "RetrieveMultiple",
+      "description": "Return test entities",
+      "match": { "entityName": "account" },
+      "response": {
+        "entities": [
+          {
+            "logicalName": "account",
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "attributes": { "name": "Test Account" }
+          }
+        ],
+        "moreRecords": false
+      }
+    }
+  ]
+}
+```
+
+2. **Launch the harness** with your plugin:
+```bash
+XrmToolBox.TestHarness.exe --plugin "path\to\YourPlugin.dll" --mockdata "mockdata.json" --screenshots "./screenshots" --record "calls.json"
+```
+
+3. **Drive the UI via FlaUI-MCP** (Claude Code can do this automatically):
+   - Find the harness window by title: `"Test Harness - {PluginName}"`
+   - Controls are discoverable by `AutomationId` (the WinForms control `Name`)
+   - Standard XrmToolBox Hungarian naming works: `btnLoad`, `dgvAttributes`, `cboSolutions`, `txtFilter`, etc.
+   - Click buttons, fill text fields, read grid data, take screenshots
+
+4. **Verify results**:
+   - Check screenshots for visual correctness
+   - Read `calls.json` to verify the plugin made expected SDK calls
+   - Inspect control properties (enabled/disabled, text, row count)
+
+#### Mock Data Match Criteria
+
+| Key | Description |
+|-----|-------------|
+| `entityName` | Match by entity logical name |
+| `requestType` | Match Execute requests by full type name (e.g., `Microsoft.Crm.Sdk.Messages.WhoAmIRequest`) |
+| `queryExpressionEntity` | Match QueryExpression by entity name |
+| `fetchXmlContains` | Match FetchExpression containing a substring |
+| `*` | Wildcard -- matches anything |
+
+Responses are matched in order; first match wins. Use `resultsFile` for large payloads (metadata responses) in separate JSON files.
+
+#### CLI Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--plugin, -p <path>` | Plugin DLL path (required) | |
+| `--mockdata, -m <path>` | Mock data JSON config | (empty responses) |
+| `--width <px>` | Window width | 1024 |
+| `--height <px>` | Window height | 768 |
+| `--screenshots, -s <dir>` | Screenshot output directory | |
+| `--org <name>` | Organization display name | Mock Organization |
+| `--record, -r <path>` | Record SDK calls to JSON on exit | |
+| `--no-autoconnect` | Don't inject mock service on load | |
+
+#### Tips
+
+- Press **F12** in the harness window to take a manual screenshot
+- The mock service records every SDK call -- check `calls.json` after closing to verify plugin behavior
+- Use `"fault"` entries in mock data to test error handling paths
+- Use `"delay"` to simulate slow responses and test loading indicators
+
 ### `help`
 
 Show this skill's available commands and XrmToolBox plugin testing guidance.
 
 ## What NOT to Test
 
-- **WinForms UI**: Don't try to instantiate `PluginControlBase` subclasses in tests. They require the XrmToolBox hosting environment. Test the services and logic behind the UI instead.
 - **MEF plugin loading**: The `[Export(typeof(IXrmToolBoxPlugin))]` attribute is validated by XrmToolBox at runtime. Testing it requires loading the full XrmToolBox process.
 - **Connection management**: `ExecuteMethod()`, `WorkAsync()`, and `UpdateConnection()` are framework methods. Trust they work. Test the code that runs inside them.
 
@@ -374,6 +467,7 @@ Show this skill's available commands and XrmToolBox plugin testing guidance.
 - **Concurrency**: Thread-safe counters, concurrent collections, lock correctness.
 - **Error classification**: Transient vs permanent error detection, duplicate detection.
 - **Retry logic**: Exponential backoff behavior, max retry limits.
+- **UI behavior** (via Test Harness): Button enable/disable states, grid population, control visibility, error dialogs, loading indicators. Use the `ui-test` command for guidance.
 
 ## Testing Patterns
 
